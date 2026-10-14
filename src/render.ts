@@ -148,18 +148,17 @@ export function render(layout: Layout, options: RenderOptions = {}): string {
   };
 
   // One marker for each mark in each line color the drawing actually uses.
-  const markers = new Map<string, [Mark, string]>();
+  const markers = new Map<string, [Mark, string, MarkEnd]>();
   for (const edge of layout.edges) {
     const color = lineOf(edge.appearance, theme, theme.edge);
-    for (const mark of [edge.marks.from, edge.marks.to]) {
-      if (mark !== 'none') markers.set(markerId(mark, color), [mark, color]);
-    }
+    if (edge.marks.from !== 'none') markers.set(markerId(edge.marks.from, color, 'start'), [edge.marks.from, color, 'start']);
+    if (edge.marks.to !== 'none') markers.set(markerId(edge.marks.to, color, 'end'), [edge.marks.to, color, 'end']);
   }
 
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="${canvas.x} ${canvas.y} ${canvas.width} ${canvas.height}" font-family=${quote(measurer.fontFamily)} font-size="${fontSize}px">`,
     '  <defs>',
-    ...[...markers.values()].map(([mark, color]) => markMarker(mark, color, theme.background)),
+    ...[...markers.values()].map(([mark, color, end]) => markMarker(mark, color, end, theme.background)),
     // Each mask covers the whole page, in page units: the default region is the
     // line's own bounding box, which a straight level line gives no height, and
     // the line would vanish entirely.
@@ -554,9 +553,9 @@ function drawEdge(
   const color = lineOf(edge.appearance, theme, theme.edge);
   const stroke = strokeOf(color, edge.look);
 
-  const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color)})"` : '';
+  const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, 'end')})"` : '';
   const markerStart =
-    edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color)})"` : '';
+    edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, 'start')})"` : '';
 
   // A named side is a statement about how the line should leave or arrive, so
   // it is drawn as a curve that actually does leave and arrive that way. With
@@ -3546,17 +3545,24 @@ function markShape(mark: Mark, color: string, background: string): string {
   }
 }
 
-/** One marker, drawn at either end: `auto-start-reverse` turns it round at the start. */
-function markMarker(mark: Mark, color: string, background: string): string {
+type MarkEnd = 'start' | 'end';
+
+/**
+ * One marker for one end of a line. Both ends use plain `orient="auto"`; the
+ * start's marker is drawn mirrored so it points back along the line.  Renderers
+ * that ignore `auto-start-reverse` (resvg) then draw both ends correctly.
+ */
+function markMarker(mark: Mark, color: string, end: MarkEnd, background: string): string {
+  const shape = markShape(mark, color, background);
   return [
-    `    <marker id="${markerId(mark, color)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}" orient="auto-start-reverse">`,
-    `      ${markShape(mark, color, background)}`,
+    `    <marker id="${markerId(mark, color, end)}" viewBox="0 0 10 10" refX="${end === 'start' ? 1 : 9}" refY="5" markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}" orient="auto">`,
+    end === 'start' ? `      <g transform="translate(10 0) scale(-1 1)">${shape}</g>` : `      ${shape}`,
     '    </marker>',
   ].join('\n');
 }
 
-function markerId(mark: Mark, color: string): string {
-  return `${mark}-${color.replace(/[^a-zA-Z0-9]/g, '')}`;
+function markerId(mark: Mark, color: string, end: MarkEnd): string {
+  return `${mark}-${end === 'start' ? 'start-' : ''}${color.replace(/[^a-zA-Z0-9]/g, '')}`;
 }
 
 // --- small shared pieces ------------------------------------------------------
