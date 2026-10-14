@@ -161,21 +161,21 @@ export function render(layout: Layout, options: RenderOptions = {}): string {
   };
 
   // One marker for each mark in each line color the drawing actually uses.
-  const markers = new Map<string, [Mark, string, boolean]>();
+  const markers = new Map<string, [Mark, string, boolean, MarkEnd]>();
   for (const edge of edges) {
     if (hidden(edge)) continue;
     const color = lineOf(edge.appearance, theme, theme.edge);
-    for (const which of ['from', 'to'] as const) {
+    for (const [which, end] of [['from', 'start'], ['to', 'end']] as const) {
       const mark = edge.marks[which];
       const free = freeEnd(edge, which);
-      if (mark !== 'none') markers.set(markerId(mark, color, free), [mark, color, free]);
+      if (mark !== 'none') markers.set(markerId(mark, color, free, end), [mark, color, free, end]);
     }
   }
 
   const svg = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="${canvas.x} ${canvas.y} ${canvas.width} ${canvas.height}" font-family=${quote(measurer.fontFamily)} font-size="${fontSize}px">`,
     '  <defs>',
-    ...[...markers.values()].map(([mark, color, free]) => markMarker(mark, color, theme.background, free)),
+    ...[...markers.values()].map(([mark, color, free, end]) => markMarker(mark, color, theme.background, free, end)),
     // Each mask covers the whole page, in page units: the default region is the
     // line's own bounding box, which a straight level line gives no height, and
     // the line would vanish entirely.
@@ -931,9 +931,9 @@ function drawEdge(
   const color = lineOf(edge.appearance, theme, theme.edge);
   const stroke = strokeOf(color, edge.look);
 
-  const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, freeEnd(edge, 'to'))})"` : '';
+  const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, freeEnd(edge, 'to'), 'end')})"` : '';
   const markerStart =
-    edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, freeEnd(edge, 'from'))})"` : '';
+    edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, freeEnd(edge, 'from'), 'start')})"` : '';
 
   const points = route.points;
   const start = points[0]!;
@@ -1335,25 +1335,31 @@ function freeEnd(edge: LayoutEdge, which: 'from' | 'to'): boolean {
   return edge.bundle !== undefined || edge.onLine?.[which] !== undefined || edge.onMark?.[which] === 'point';
 }
 
+type MarkEnd = 'start' | 'end';
+
 /**
- * One marker, drawn at either end: `auto-start-reverse` turns it round at the
- * start. A dot keeps an ordinary line's size on any line, since scaled with a
- * thick line it became a blob. At a box it sits just outside the border; at a
- * free end it is centered on the point, since set back like an arrowhead, two
- * dots meeting at one point from either side ran together.
+ * One marker for one end of a line. Both ends use plain `orient="auto"`; the
+ * start's marker is drawn mirrored so it points back along the line, so
+ * renderers that ignore `auto-start-reverse` (resvg) draw both ends right. A
+ * dot keeps an ordinary line's size on any line, since scaled with a thick line
+ * it became a blob. At a box it sits just outside the border; at a free end it
+ * is centered on the point, since set back like an arrowhead, two dots meeting
+ * at one point from either side ran together.
  */
-function markMarker(mark: Mark, color: string, background: string, free: boolean): string {
+function markMarker(mark: Mark, color: string, background: string, free: boolean, end: MarkEnd): string {
   const round = mark === 'dot' || mark === 'odot';
   const size = round ? ` markerUnits="userSpaceOnUse" markerWidth="${ARROW_MARKER_WIDTH * LINE_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH * LINE_WIDTH}"` : ` markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}"`;
+  const shape = markShape(mark, color, background);
+  const refX = round && free ? 5 : end === 'start' ? 1 : 9;
   return [
-    `    <marker id="${markerId(mark, color, free)}" viewBox="0 0 10 10" refX="${round && free ? 5 : 9}" refY="5"${size} orient="auto-start-reverse">`,
-    `      ${markShape(mark, color, background)}`,
+    `    <marker id="${markerId(mark, color, free, end)}" viewBox="0 0 10 10" refX="${refX}" refY="5"${size} orient="auto">`,
+    end === 'start' ? `      <g transform="translate(10 0) scale(-1 1)">${shape}</g>` : `      ${shape}`,
     '    </marker>',
   ].join('\n');
 }
 
-function markerId(mark: Mark, color: string, free: boolean): string {
-  return `${mark}-${color.replace(/[^a-zA-Z0-9]/g, '')}${free && (mark === 'dot' || mark === 'odot') ? '-free' : ''}`;
+function markerId(mark: Mark, color: string, free: boolean, end: MarkEnd): string {
+  return `${mark}-${end === 'start' ? 'start-' : ''}${color.replace(/[^a-zA-Z0-9]/g, '')}${free && (mark === 'dot' || mark === 'odot') ? '-free' : ''}`;
 }
 
 // --- small shared pieces ------------------------------------------------------
