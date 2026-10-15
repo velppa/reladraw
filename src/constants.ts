@@ -9,6 +9,11 @@ import { plain, type Line } from './text.js';
 export const PAD = 14;
 /** How far in from each side a `framed` box draws its inner bars. */
 export const BAR = 8;
+
+/** How deep an `octagon` box this tall cuts each corner: square across, as on a regular octagon. */
+export function cutOf(height: number): number {
+  return height / (2 + Math.SQRT2);
+}
 /** Between stacked children of one container. */
 export const CHILD_GAP = 10;
 /** Between a container's own text and its first child. */

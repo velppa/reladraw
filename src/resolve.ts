@@ -40,6 +40,7 @@ import {
   TEXT_CLEARANCE,
   BAR,
   PAD,
+  cutOf,
   SEPARATION_GAP,
   THICKNESS,
   arrowLength,
@@ -939,6 +940,7 @@ function sizeNode(
   if (outline === 'circle') circumscribe(node, local);
   if (outline === 'diamond') enclose(node, local);
   if (outline === 'pill' || outline === 'half-pill' || outline === 'framed') addEnds(node, outline, local);
+  if (outline === 'octagon') cutCorners(node, local);
   applyDeck(node, local);
 }
 
@@ -950,7 +952,11 @@ function isDiamond(node: LayoutNode): boolean {
   return node.body.kind === 'shape' && node.body.outline === 'diamond';
 }
 
-type GrownOutline = 'circle' | 'diamond' | 'pill' | 'framed' | 'half-pill';
+function isOctagon(node: LayoutNode): boolean {
+  return node.body.kind === 'shape' && node.body.outline === 'octagon';
+}
+
+type GrownOutline = 'circle' | 'diamond' | 'pill' | 'framed' | 'half-pill' | 'octagon';
 
 /** The outline that grows the node's box beyond what it holds, if any. */
 function pointedOutline(node: LayoutNode): GrownOutline | undefined {
@@ -979,6 +985,16 @@ function addEnds(node: LayoutNode, outline: 'pill' | 'half-pill' | 'framed', loc
   const right = outline === 'framed' ? BAR : cap;
   moveInside(node, left, 0, local);
   node.width += left + right;
+}
+
+/**
+ * Widen a node sized as a rectangle so what it holds stays clear of the
+ * corners an octagon cuts away.
+ */
+function cutCorners(node: LayoutNode, local: Local): void {
+  const grow = Math.max(0, cutOf(node.height) - PAD);
+  moveInside(node, grow, 0, local);
+  node.width += 2 * grow;
 }
 
 /**
@@ -1041,24 +1057,25 @@ function refuseOnOutline(node: LayoutNode, outline: GrownOutline): void {
   const [framed] = framedChildren(node);
   const noun = outline === 'framed' ? 'framed box' : outline.replace('-', ' ');
   const many = /[sx]$/.test(noun) ? `${noun}es` : `${noun}s`;
+  const a = /^[aeiou]/.test(noun) ? 'an' : 'a';
   if (node.attrs['badge'] !== undefined || node.appearance['badge'] !== undefined) {
     throw new SourceError(
-      `"${node.name}" is a ${noun} with a badge:, and a badge is not built for ${many} yet — ` +
+      `"${node.name}" is ${a} ${noun} with a badge:, and a badge is not built for ${many} yet — ` +
         `make it a rectangle, or place the badge as a node of its own against the ${noun}`,
       node.line,
     );
   }
   if (framed !== undefined) {
     throw new SourceError(
-      `"${framed.name}" is placed against "${node.name}" itself, and "${node.name}" is a ${noun}. ` +
-        `Something placed against a ${noun}'s own edge or text is not built yet — place it against ` +
+      `"${framed.name}" is placed against "${node.name}" itself, and "${node.name}" is ${a} ${noun}. ` +
+        `Something placed against ${a} ${noun}'s own edge or text is not built yet — place it against ` +
         `another node, or make "${node.name}" a rectangle`,
       framed.line,
     );
   }
   if (node.deckTexts.length > 0) {
     throw new SourceError(
-      `"${node.name}" is a ${noun} with a deck:, and a deck is not built for ${many} yet`,
+      `"${node.name}" is ${a} ${noun} with a deck:, and a deck is not built for ${many} yet`,
       node.line,
     );
   }
@@ -2373,6 +2390,12 @@ function partOf(target: Target, part: Part | undefined, owner: LayoutNode, line:
   if (isDiamond(target.node) && across && down) {
     box.offset.x += words.includes('left') ? target.width / 4 : -target.width / 4;
     box.offset.y += words.includes('top') ? target.height / 4 : -target.height / 4;
+  }
+  // An octagon's corners are cut away, so its corner is the middle of the cut.
+  if (isOctagon(target.node) && across && down) {
+    const pull = cutOf(target.height) / 2;
+    box.offset.x += words.includes('left') ? pull : -pull;
+    box.offset.y += words.includes('top') ? pull : -pull;
   }
   // A rounded end has no corner either: its corner is the point on it halfway
   // between the two sides named.

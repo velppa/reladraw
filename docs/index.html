@@ -684,7 +684,7 @@
 
             <dt>Body</dt>
             <dd>
-              <code>shape: rectangle|document|circle|diamond|pill|framed|half-pill|none</code> — the outline the node is drawn with;
+              <code>shape: rectangle|document|circle|diamond|pill|framed|half-pill|octagon|none</code> — the outline the node is drawn with;
               <code>none</code> is text with no box, which is what an annotation is.<br />
               <code>icon: <i>name</i></code> — the node <i>is</i> that picture, with no box.<br />
               <code>badge: <i>name</i></code> — the picture sits <i>beside</i> the text and the node keeps its box.<br />
@@ -3287,6 +3287,10 @@ function markupStyles(lines) {
 const PAD = 14;
 /** How far in from each side a `framed` box draws its inner bars. */
 const BAR = 8;
+/** How deep an `octagon` box this tall cuts each corner: square across, as on a regular octagon. */
+function cutOf(height) {
+    return height / (2 + Math.SQRT2);
+}
 /** Between stacked children of one container. */
 const CHILD_GAP = 10;
 /** Between a container's own text and its first child. */
@@ -3649,10 +3653,11 @@ const ICON_NAMES = Object.keys(ICONS);
  * diagram's own convention makes it. The flowchart outlines are named for
  * their geometry too - `diamond`, `pill`, `framed`, `half-pill` - since each
  * means what the diagram's legend says: a decision, a start or end, a step
- * drawn elsewhere, a wait in the usual flowchart. The set being short is a fact about what has been drawn, not about the
+ * drawn elsewhere, a wait in the usual flowchart. `octagon` is the stop sign
+ * among them: a gate the flow must pass. The set being short is a fact about what has been drawn, not about the
  * key.
  */
-const OUTLINES = ['rectangle', 'document', 'circle', 'diamond', 'pill', 'framed', 'half-pill'];
+const OUTLINES = ['rectangle', 'document', 'circle', 'diamond', 'pill', 'framed', 'half-pill', 'octagon'];
 /** Every value `shape:` accepts, `none` included. */
 const SHAPE_WORDS = [...OUTLINES, 'none'];
 const PLAIN = { kind: 'shape', outline: 'rectangle' };
@@ -4463,15 +4468,15 @@ function render(layout, options = {}) {
     const markers = new Map();
     for (const edge of layout.edges) {
         const color = lineOf(edge.appearance, theme, theme.edge);
-        for (const mark of [edge.marks.from, edge.marks.to]) {
-            if (mark !== 'none')
-                markers.set(markerId(mark, color), [mark, color]);
-        }
+        if (edge.marks.from !== 'none')
+            markers.set(markerId(edge.marks.from, color, 'start'), [edge.marks.from, color, 'start']);
+        if (edge.marks.to !== 'none')
+            markers.set(markerId(edge.marks.to, color, 'end'), [edge.marks.to, color, 'end']);
     }
     const svg = [
         `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="${canvas.x} ${canvas.y} ${canvas.width} ${canvas.height}" font-family=${quote(measurer.fontFamily)} font-size="${fontSize}px">`,
         '  <defs>',
-        ...[...markers.values()].map(([mark, color]) => markMarker(mark, color, theme.background)),
+        ...[...markers.values()].map(([mark, color, end]) => markMarker(mark, color, end, theme.background)),
         // Each mask covers the whole page, in page units: the default region is the
         // line's own bounding box, which a straight level line gives no height, and
         // the line would vanish entirely.
@@ -4674,6 +4679,21 @@ function outlinePath(shape, x, y, w, h) {
             'Z',
         ].join(' ');
     }
+    if (shape === 'octagon') {
+        // Each corner cut square across.
+        const c = cutOf(h);
+        return [
+            `M${round(x + c)} ${round(y)}`,
+            `H${round(x + w - c)}`,
+            `L${round(x + w)} ${round(y + c)}`,
+            `V${round(y + h - c)}`,
+            `L${round(x + w - c)} ${round(y + h)}`,
+            `H${round(x + c)}`,
+            `L${round(x)} ${round(y + h - c)}`,
+            `V${round(y + c)}`,
+            'Z',
+        ].join(' ');
+    }
     if (shape === 'pill' || shape === 'half-pill') {
         // A half circle on the right, and on the left too for a pill; a half pill's
         // left corners are a box's.
@@ -4761,8 +4781,8 @@ function drawEdge(edge, ends, route, sweep, nodes, theme, measurer, fontSize, ma
     const { start, end } = ends;
     const color = lineOf(edge.appearance, theme, theme.edge);
     const stroke = strokeOf(color, edge.look);
-    const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color)})"` : '';
-    const markerStart = edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color)})"` : '';
+    const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, 'end')})"` : '';
+    const markerStart = edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, 'start')})"` : '';
     // A named side is a statement about how the line should leave or arrive, so
     // it is drawn as a curve that actually does leave and arrive that way. With
     // neither side named there is nothing to honor and the line stays straight.
@@ -5451,7 +5471,8 @@ function sidePoint(box, toward) {
     const scaleX = dx === 0 ? Infinity : box.width / 2 / Math.abs(dx);
     const scaleY = dy === 0 ? Infinity : box.height / 2 / Math.abs(dy);
     const scale = Math.min(scaleX, scaleY);
-    return ontoCaps(box, center, { x: dx, y: dy }, { x: center.x + dx * scale, y: center.y + dy * scale });
+    const point = { x: center.x + dx * scale, y: center.y + dy * scale };
+    return ontoCut(box, center, { x: dx, y: dy }, ontoCaps(box, center, { x: dx, y: dy }, point));
 }
 // --- where an edge meets a box -------------------------------------------------
 // The four sides an edge may attach to. Deliberately not `ATTACH_SIDES` from
@@ -5848,6 +5869,8 @@ function anchorOn(face, side, at) {
         return anchorOnDiamond(face, side, at);
     if (face.caps)
         return anchorOnCaps(face, side, at);
+    if (face.cut)
+        return anchorOnCut(face, side, at);
     switch (side) {
         case 'top':
             return { x: at, y: face.y, tx: 0, ty: -1, side };
@@ -5929,6 +5952,39 @@ function anchorOnCaps(face, side, at) {
     const reach = Math.sqrt(Math.max(0, radius * radius - (flat.y - cy) ** 2));
     const cx = side === 'left' ? face.x + radius : face.x + face.width - radius;
     return { ...flat, x: cx + (side === 'right' ? reach : -reach) };
+}
+/**
+ * The same, on an octagon: the point on the border straight in from `at`,
+ * which on a cut corner is on the cut. The line still leaves square to the side.
+ */
+function anchorOnCut(face, side, at) {
+    const flat = anchorOn({ ...face, cut: undefined }, side, at);
+    const cut = face.cut;
+    if (side === 'top' || side === 'bottom') {
+        const into = Math.max(0, face.x + cut - flat.x, flat.x - (face.x + face.width - cut));
+        return { ...flat, y: flat.y + (side === 'top' ? into : -into) };
+    }
+    const into = Math.max(0, face.y + cut - flat.y, flat.y - (face.y + face.height - cut));
+    return { ...flat, x: flat.x + (side === 'left' ? into : -into) };
+}
+/**
+ * Move a point found on a box's rectangle onto its cut corner, when it falls
+ * beyond one: where the ray from `from` along `dir` crosses that cut.
+ */
+function ontoCut(box, from, dir, point) {
+    if (!box.cut)
+        return point;
+    const center = centerOf(box);
+    const reach = box.width / 2 + box.height / 2 - box.cut;
+    const sx = Math.sign(point.x - center.x);
+    const sy = Math.sign(point.y - center.y);
+    if (sx * (point.x - center.x) + sy * (point.y - center.y) <= reach)
+        return point;
+    const along = sx * dir.x + sy * dir.y;
+    if (along <= 0)
+        return point;
+    const t = Math.max(0, (reach - sx * (from.x - center.x) - sy * (from.y - center.y)) / along);
+    return { x: from.x + dir.x * t, y: from.y + dir.y * t };
 }
 /**
  * Move a point found on a box's rectangle onto its rounded end, when it falls
@@ -6015,7 +6071,8 @@ function exitAlong(box, from, dir) {
     const t = Math.min(tx, ty);
     if (!Number.isFinite(t))
         return { x, y };
-    return ontoCaps(box, { x, y }, dir, { x: x + dir.x * Math.max(0, t), y: y + dir.y * Math.max(0, t) });
+    const point = { x: x + dir.x * Math.max(0, t), y: y + dir.y * Math.max(0, t) };
+    return ontoCut(box, { x, y }, dir, ontoCaps(box, { x, y }, dir, point));
 }
 /**
  * Both ends of an edge that named no side, moved `offset` sideways across its
@@ -6732,7 +6789,7 @@ function obstaclesFor(edge, nodes) {
         // cannot stand for it here; a line meeting either square on does not cross
         // it anyway.
         ...[edge.from, edge.to]
-            .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps)
+            .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps && !faceOf(node).cut)
             .map((node) => grow(extentOfBox(faceOf(node)), -1)),
         ...nodes
             .filter((node) => !contains(node, edge.from) && !contains(node, edge.to))
@@ -7272,7 +7329,7 @@ function sweptPath(points, boxes, neighbors, arrow, marks) {
 function sweepObstacles(edge, nodes) {
     return [
         ...[edge.from, edge.to]
-            .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps)
+            .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps && !faceOf(node).cut)
             .map((node) => grow(extentOfBox(faceOf(node)), -1)),
         ...nodes
             .filter((node) => !contains(node, edge.from) && !contains(node, edge.to))
@@ -7413,16 +7470,21 @@ function markShape(mark, color, background) {
             return '';
     }
 }
-/** One marker, drawn at either end: `auto-start-reverse` turns it round at the start. */
-function markMarker(mark, color, background) {
+/**
+ * One marker for one end of a line. Both ends use plain `orient="auto"`; the
+ * start's marker is drawn mirrored so it points back along the line.  Renderers
+ * that ignore `auto-start-reverse` (resvg) then draw both ends correctly.
+ */
+function markMarker(mark, color, end, background) {
+    const shape = markShape(mark, color, background);
     return [
-        `    <marker id="${markerId(mark, color)}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}" orient="auto-start-reverse">`,
-        `      ${markShape(mark, color, background)}`,
+        `    <marker id="${markerId(mark, color, end)}" viewBox="0 0 10 10" refX="${end === 'start' ? 1 : 9}" refY="5" markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}" orient="auto">`,
+        end === 'start' ? `      <g transform="translate(10 0) scale(-1 1)">${shape}</g>` : `      ${shape}`,
         '    </marker>',
     ].join('\n');
 }
-function markerId(mark, color) {
-    return `${mark}-${color.replace(/[^a-zA-Z0-9]/g, '')}`;
+function markerId(mark, color, end) {
+    return `${mark}-${end === 'start' ? 'start-' : ''}${color.replace(/[^a-zA-Z0-9]/g, '')}`;
 }
 /** The rectangle actually drawn. Differs from the node box only for a deck. */
 function faceOf(node) {
@@ -7434,6 +7496,7 @@ function faceOf(node) {
         round: node.body.kind === 'shape' && node.body.outline === 'circle',
         pointed: node.body.kind === 'shape' && node.body.outline === 'diamond',
         caps: capsOf(node),
+        cut: node.body.kind === 'shape' && node.body.outline === 'octagon' ? cutOf(node.height - node.inset) : undefined,
     };
 }
 /** The radius of each rounded end of a pill or a half pill; none on other outlines. */
@@ -8396,6 +8459,8 @@ function sizeNode(node, edges, measurer, fontSize, local) {
         enclose(node, local);
     if (outline === 'pill' || outline === 'half-pill' || outline === 'framed')
         addEnds(node, outline, local);
+    if (outline === 'octagon')
+        cutCorners(node, local);
     applyDeck(node, local);
 }
 function isCircle(node) {
@@ -8403,6 +8468,9 @@ function isCircle(node) {
 }
 function isDiamond(node) {
     return node.body.kind === 'shape' && node.body.outline === 'diamond';
+}
+function isOctagon(node) {
+    return node.body.kind === 'shape' && node.body.outline === 'octagon';
 }
 /** The outline that grows the node's box beyond what it holds, if any. */
 function pointedOutline(node) {
@@ -8433,6 +8501,15 @@ function addEnds(node, outline, local) {
     const right = outline === 'framed' ? BAR : cap;
     moveInside(node, left, 0, local);
     node.width += left + right;
+}
+/**
+ * Widen a node sized as a rectangle so what it holds stays clear of the
+ * corners an octagon cuts away.
+ */
+function cutCorners(node, local) {
+    const grow = Math.max(0, cutOf(node.height) - PAD);
+    moveInside(node, grow, 0, local);
+    node.width += 2 * grow;
 }
 /**
  * Grow a node sized as a rectangle into the circle around what it holds.
@@ -8491,17 +8568,18 @@ function refuseOnOutline(node, outline) {
     const [framed] = framedChildren(node);
     const noun = outline === 'framed' ? 'framed box' : outline.replace('-', ' ');
     const many = /[sx]$/.test(noun) ? `${noun}es` : `${noun}s`;
+    const a = /^[aeiou]/.test(noun) ? 'an' : 'a';
     if (node.attrs['badge'] !== undefined || node.appearance['badge'] !== undefined) {
-        throw new SourceError(`"${node.name}" is a ${noun} with a badge:, and a badge is not built for ${many} yet — ` +
+        throw new SourceError(`"${node.name}" is ${a} ${noun} with a badge:, and a badge is not built for ${many} yet — ` +
             `make it a rectangle, or place the badge as a node of its own against the ${noun}`, node.line);
     }
     if (framed !== undefined) {
-        throw new SourceError(`"${framed.name}" is placed against "${node.name}" itself, and "${node.name}" is a ${noun}. ` +
-            `Something placed against a ${noun}'s own edge or text is not built yet — place it against ` +
+        throw new SourceError(`"${framed.name}" is placed against "${node.name}" itself, and "${node.name}" is ${a} ${noun}. ` +
+            `Something placed against ${a} ${noun}'s own edge or text is not built yet — place it against ` +
             `another node, or make "${node.name}" a rectangle`, framed.line);
     }
     if (node.deckTexts.length > 0) {
-        throw new SourceError(`"${node.name}" is a ${noun} with a deck:, and a deck is not built for ${many} yet`, node.line);
+        throw new SourceError(`"${node.name}" is ${a} ${noun} with a deck:, and a deck is not built for ${many} yet`, node.line);
     }
 }
 /**
@@ -9600,6 +9678,12 @@ function partOf(target, part, owner, line) {
     if (isDiamond(target.node) && across && down) {
         box.offset.x += words.includes('left') ? target.width / 4 : -target.width / 4;
         box.offset.y += words.includes('top') ? target.height / 4 : -target.height / 4;
+    }
+    // An octagon's corners are cut away, so its corner is the middle of the cut.
+    if (isOctagon(target.node) && across && down) {
+        const pull = cutOf(target.height) / 2;
+        box.offset.x += words.includes('left') ? pull : -pull;
+        box.offset.y += words.includes('top') ? pull : -pull;
     }
     // A rounded end has no corner either: its corner is the point on it halfway
     // between the two sides named.

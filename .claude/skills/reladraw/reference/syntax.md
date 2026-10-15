@@ -186,6 +186,7 @@ Every node has a *body*: the thing that is drawn where the node is. Two keys nam
 | `pill` | A box with both ends round — in a flowchart, *where the flow starts or ends*. |
 | `framed` | A box with a bar inside each side — in a flowchart, *a step drawn elsewhere*, in another chart or section. |
 | `half-pill` | A box with its right end round — in a flowchart, *a wait* until something outside the flow happens. |
+| `octagon` | A box with each corner cut square across — the stop sign: *a gate* the flow must pass. |
 | `none` | No outline, no fill, no padding. The node is its text and nothing else. |
 
 `icon: <name>` is a picture the node is drawn **as**, with no box at all.
@@ -215,6 +216,8 @@ A circle is an ordinary node in every other way, and the file means the same thi
 A diamond is the same kind of ordinary node. Of the diamonds that hold its text it is the one with the shortest outline, which keeps a one-line question from stretching into a flat sliver, and the text sits clear of the slanted edges. `from: right` leaves from its right point, and several edges on one side spread along the two edges meeting at that point, each leaving square to the side as from a rectangle. A corner such as `top-right` is the middle of the edge between those two points. A diamond can hold other nodes, takes `widths:` by growing wider, and refuses a `badge:`, a `deck:` or a node placed against its own edge or text exactly as a circle does.
 
 `pill`, `framed` and `half-pill` complete the flowchart, named like `circle` and `diamond` for what is drawn rather than what it means: with `rectangle` for a step, `diamond` for a decision and `document` for what a step produces, a flowchart can be drawn in the symbols a reader already knows. Each is the box its text needs with its ends added, so the text stays clear of a round end or a bar. An edge on a round end meets its curve, and a corner of a round end is the point on the curve halfway round. Like a circle, these cannot yet take a `badge:`, a `deck:`, or a node placed against their own edge or text.
+
+`octagon` is the box its text needs with each corner cut square across, as deep as on a regular octagon that tall, and widened so the text stays clear of the cuts. It reads as a stop sign: a gate every path through it must pass. An edge on a side meets the outline, so one spread out beside a cut corner lands on the cut, and a corner such as `top-right` is the middle of the cut. It refuses a badge, a deck and a node placed against its own edge or text, as a circle does.
 
 `circle` is the one name that describes the picture rather than the meaning, because a circle has no single meaning to name it after: it is a state in one diagram, a step in another, a person in a third.
 
@@ -1150,6 +1153,7 @@ Pre-1.0, so the minor number is where a breaking change goes. Every removal belo
 
 **Unreleased**
 
+- `shape: octagon`, a gate. Each corner is cut square across and the box widens to keep its text clear of the cuts. Edges on a side meet the outline, and a corner of it is the middle of its cut. It does not yet take a badge, a deck or a node placed against its own edge. Nothing that already renders changes.
 - `shape: pill`, `shape: framed` and `shape: half-pill`, the flowchart's start and end, step drawn elsewhere, and wait. Edges and corners on a round end meet its curve.
 - `shape: diamond`, a decision. A diamond is sized to hold its text, the way a circle is. Edges on one of its sides spread along the two edges that meet at that point, and a corner of it is the middle of an edge. It does not yet take a badge, a deck or a node placed against its own edge. Nothing that already renders changes.
 

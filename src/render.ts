@@ -9,6 +9,7 @@ import {
   LINE_WIDTH,
   BAR,
   PAD,
+  cutOf,
   SEPARATION_GAP,
   arrowLength,
   fontSizeFor,
@@ -424,6 +425,21 @@ function outlinePath(shape: Outline, x: number, y: number, w: number, h: number)
       `L${round(x + w)} ${round(y + h / 2)}`,
       `L${round(x + w / 2)} ${round(y + h)}`,
       `L${round(x)} ${round(y + h / 2)}`,
+      'Z',
+    ].join(' ');
+  }
+  if (shape === 'octagon') {
+    // Each corner cut square across.
+    const c = cutOf(h);
+    return [
+      `M${round(x + c)} ${round(y)}`,
+      `H${round(x + w - c)}`,
+      `L${round(x + w)} ${round(y + c)}`,
+      `V${round(y + h - c)}`,
+      `L${round(x + w - c)} ${round(y + h)}`,
+      `H${round(x + c)}`,
+      `L${round(x)} ${round(y + h - c)}`,
+      `V${round(y + c)}`,
       'Z',
     ].join(' ');
   }
@@ -1294,7 +1310,8 @@ function sidePoint(box: Box, toward: { x: number; y: number }): { x: number; y: 
   const scaleY = dy === 0 ? Infinity : box.height / 2 / Math.abs(dy);
   const scale = Math.min(scaleX, scaleY);
 
-  return ontoCaps(box, center, { x: dx, y: dy }, { x: center.x + dx * scale, y: center.y + dy * scale });
+  const point = { x: center.x + dx * scale, y: center.y + dy * scale };
+  return ontoCut(box, center, { x: dx, y: dy }, ontoCaps(box, center, { x: dx, y: dy }, point));
 }
 
 // --- where an edge meets a box -------------------------------------------------
@@ -1840,6 +1857,7 @@ function anchorOn(face: Box, side: AttachSide, at: number): Anchor {
   if (face.round) return anchorOnCircle(face, side, at);
   if (face.pointed) return anchorOnDiamond(face, side, at);
   if (face.caps) return anchorOnCaps(face, side, at);
+  if (face.cut) return anchorOnCut(face, side, at);
   switch (side) {
     case 'top':
       return { x: at, y: face.y, tx: 0, ty: -1, side };
@@ -1923,6 +1941,43 @@ function anchorOnCaps(face: Box, side: AttachSide, at: number): Anchor {
   const reach = Math.sqrt(Math.max(0, radius * radius - (flat.y - cy) ** 2));
   const cx = side === 'left' ? face.x + radius : face.x + face.width - radius;
   return { ...flat, x: cx + (side === 'right' ? reach : -reach) };
+}
+
+/**
+ * The same, on an octagon: the point on the border straight in from `at`,
+ * which on a cut corner is on the cut. The line still leaves square to the side.
+ */
+function anchorOnCut(face: Box, side: AttachSide, at: number): Anchor {
+  const flat = anchorOn({ ...face, cut: undefined }, side, at);
+  const cut = face.cut!;
+  if (side === 'top' || side === 'bottom') {
+    const into = Math.max(0, face.x + cut - flat.x, flat.x - (face.x + face.width - cut));
+    return { ...flat, y: flat.y + (side === 'top' ? into : -into) };
+  }
+  const into = Math.max(0, face.y + cut - flat.y, flat.y - (face.y + face.height - cut));
+  return { ...flat, x: flat.x + (side === 'left' ? into : -into) };
+}
+
+/**
+ * Move a point found on a box's rectangle onto its cut corner, when it falls
+ * beyond one: where the ray from `from` along `dir` crosses that cut.
+ */
+function ontoCut(
+  box: Box,
+  from: { x: number; y: number },
+  dir: { x: number; y: number },
+  point: { x: number; y: number },
+): { x: number; y: number } {
+  if (!box.cut) return point;
+  const center = centerOf(box);
+  const reach = box.width / 2 + box.height / 2 - box.cut;
+  const sx = Math.sign(point.x - center.x);
+  const sy = Math.sign(point.y - center.y);
+  if (sx * (point.x - center.x) + sy * (point.y - center.y) <= reach) return point;
+  const along = sx * dir.x + sy * dir.y;
+  if (along <= 0) return point;
+  const t = Math.max(0, (reach - sx * (from.x - center.x) - sy * (from.y - center.y)) / along);
+  return { x: from.x + dir.x * t, y: from.y + dir.y * t };
 }
 
 /**
@@ -2015,7 +2070,8 @@ function exitAlong(
   const ty = dir.y === 0 ? Infinity : ((dir.y > 0 ? box.y + box.height : box.y) - y) / dir.y;
   const t = Math.min(tx, ty);
   if (!Number.isFinite(t)) return { x, y };
-  return ontoCaps(box, { x, y }, dir, { x: x + dir.x * Math.max(0, t), y: y + dir.y * Math.max(0, t) });
+  const point = { x: x + dir.x * Math.max(0, t), y: y + dir.y * Math.max(0, t) };
+  return ontoCut(box, { x, y }, dir, ontoCaps(box, { x, y }, dir, point));
 }
 
 /**
@@ -2788,7 +2844,7 @@ function obstaclesFor(edge: LayoutEdge, nodes: LayoutNode[]): Extent[] {
     // cannot stand for it here; a line meeting either square on does not cross
     // it anyway.
     ...[edge.from, edge.to]
-      .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps)
+      .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps && !faceOf(node).cut)
       .map((node) => grow(extentOfBox(faceOf(node)), -1)),
     ...nodes
       .filter((node) => !contains(node, edge.from) && !contains(node, edge.to))
@@ -3392,7 +3448,7 @@ function sweptPath(
 function sweepObstacles(edge: LayoutEdge, nodes: LayoutNode[]): Extent[] {
   return [
     ...[edge.from, edge.to]
-      .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps)
+      .filter((node) => !faceOf(node).round && !faceOf(node).pointed && !faceOf(node).caps && !faceOf(node).cut)
       .map((node) => grow(extentOfBox(faceOf(node)), -1)),
     ...nodes
       .filter((node) => !contains(node, edge.from) && !contains(node, edge.to))
@@ -3578,6 +3634,8 @@ interface Box {
   pointed?: boolean;
   /** The radius of each half-circle end, so a line meets the curve instead. */
   caps?: { left: number; right: number };
+  /** How deep each corner is cut away, so a line meets the cut instead. */
+  cut?: number;
 }
 
 /** The rectangle actually drawn. Differs from the node box only for a deck. */
@@ -3590,6 +3648,7 @@ function faceOf(node: LayoutNode): Box {
     round: node.body.kind === 'shape' && node.body.outline === 'circle',
     pointed: node.body.kind === 'shape' && node.body.outline === 'diamond',
     caps: capsOf(node),
+    cut: node.body.kind === 'shape' && node.body.outline === 'octagon' ? cutOf(node.height - node.inset) : undefined,
   };
 }
 
