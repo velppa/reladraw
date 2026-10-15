@@ -142,10 +142,10 @@ export function searchRoute(
   // the text either of them carries there.
   const halves = options.takenHalves ?? [];
   const ownHalf = options.ownHalf ?? 0;
-  const inGate = (a: SearchPoint, b: SearchPoint): boolean => {
+  const inGate = (ax: number, ay: number, bx: number, by: number): boolean => {
     if (!gate) return false;
-    const along = gate.run === 'x' ? Math.abs(a.y - b.y) < 0.5 : Math.abs(a.x - b.x) < 0.5;
-    const level = gate.run === 'x' ? a.y : a.x;
+    const along = gate.run === 'x' ? Math.abs(ay - by) < 0.5 : Math.abs(ax - bx) < 0.5;
+    const level = gate.run === 'x' ? ay : ax;
     return along && level > gate.lo && level < gate.hi;
   };
   const spacing = (line: number, stretch: number, own: number): number =>
@@ -160,7 +160,7 @@ export function searchRoute(
   const iy = new Map(ys.map((y, index) => [y, index]));
   const width = xs.length;
   const height = ys.length;
-  const steps = stepTable(xs, ys, walls, clear, options.taken, spacing, ownHalf, (a, b) => (inGate(a, b) ? ownHalf : 0));
+  const steps = stepTable(xs, ys, walls, clear, options.taken, spacing, ownHalf, inGate);
   const open = (i: number, j: number): boolean => steps.open[j * width + i] === 1;
 
   // Four headings: 0 right, 1 down, 2 left, 3 up.
@@ -180,6 +180,44 @@ export function searchRoute(
   const ti = ix.get(back.x)!;
   const tj = iy.get(back.y)!;
 
+  const done = gate ? 1 : 0;
+  const { closed, crowd, cross } = steps;
+  // Passing the gate: a stretch through it, reaching the line at `at`.
+  const passes = (ax: number, ay: number, bx: number, by: number): boolean => {
+    if (!gate || !inGate(ax, ay, bx, by)) return false;
+    const u = gate.run === 'x' ? ax : ay;
+    const v = gate.run === 'x' ? bx : by;
+    return Math.min(u, v) <= gate.at + 0.01 && Math.max(u, v) >= gate.at - 0.01;
+  };
+  // Running closer to a wall than `clear` counts double: the line may pass a
+  // narrow gap, but where there is room it keeps its distance. Crossing a line
+  // already placed costs what a turn does, so of two ways much the same length
+  // the one that crosses nothing wins.
+  const stepCost = (axis: number, key: number, ax: number, ay: number, bx: number, by: number): number =>
+    Math.abs(bx - ax) + Math.abs(by - ay) + crowd[axis]![key]! + turn * cross[axis]![key]!;
+  // The least the rest could cost, straight across and straight down to the
+  // end, by way of the gate until it is passed. It depends only on the point
+  // and whether the gate is passed, so it is worked out once for each.
+  const least = new Float64Array(width * height * 2);
+  for (let j = 0; j < height; j += 1) {
+    for (let i = 0; i < width; i += 1) {
+      const point = { x: xs[i]!, y: ys[j]! };
+      least[(j * width + i) * 2] = leastLength(point, back, gate);
+      least[(j * width + i) * 2 + 1] = leastLength(point, back, undefined);
+    }
+  }
+
+  // Under a limit, most searches find nothing: another pair of sides has
+  // already done better. Such a search is not made when no way could come in
+  // under the limit even paying only for its steps and for the fewest turns
+  // any line from this start to this end makes, with a pixel to spare for the
+  // slack in passing the gate.
+  if (limit < Infinity) {
+    const enough = limit + 1 - turn * fewestTurns(xs[ti]! - out.x, ys[tj]! - out.y, STEP[first]!, STEP[last]!);
+    const grid = { width, height, xs, ys, open, closed, passes, stepCost };
+    if (cheapestSteps(grid, sj * width + si, tj * width + ti, done, least, enough) >= enough) return undefined;
+  }
+
   // Cost is compared first on length and turns, then on a tie-break that
   // prefers a stretch higher up the page, or further right, so that of two
   // ways round that are exactly as long the line goes over the top. A state
@@ -190,21 +228,14 @@ export function searchRoute(
   const tie = new Float64Array(size).fill(Infinity);
   const from = new Int32Array(size).fill(-1);
   const state = (i: number, j: number, h: number, p: number): number => ((j * width + i) * 4 + h) * 2 + p;
-  const done = gate ? 1 : 0;
 
   // The search reaches out toward the end first: a state waits by what it has
-  // cost so far plus the least the rest could cost, straight across and
-  // straight down to the end. It does not settle each state once, since a
-  // way just as long can arrive later with a better tie-break; it keeps on
-  // until nothing waiting could come in as cheap as the end already has, and
-  // what it finds is exactly what searching every direction alike would.
-  // Until the line has passed its gate, that is by way of the gate.
-  const toGo = (current: number): number => {
-    const cell = (current - (current % 8)) / 8;
-    const i = cell % width;
-    const point = { x: xs[i]!, y: ys[(cell - i) / width]! };
-    return leastLength(point, back, current % 2 === 1 ? undefined : gate);
-  };
+  // cost so far plus the least the rest could cost. It does not settle each
+  // state once, since a way just as long can arrive later with a better
+  // tie-break; it keeps on until nothing waiting could come in as cheap as the
+  // end already has, and what it finds is exactly what searching every
+  // direction alike would.
+  const toGo = (current: number): number => least[(current >> 3) * 2 + (current & 1)]!;
   const heap = new MinHeap();
   const begin = state(si, sj, first, 0);
   const goal = state(ti, tj, last, done);
@@ -213,7 +244,9 @@ export function searchRoute(
   heap.push(begin, toGo(begin), 0);
 
   while (heap.size > 0) {
-    const [current, f, t] = heap.pop();
+    const f = heap.topCost;
+    const t = heap.topTie;
+    const current = heap.pop();
     const c = cost[current]!;
     const due = c + toGo(current);
     if (f > due || (f === due && t > tie[current]!)) continue;
@@ -240,31 +273,25 @@ export function searchRoute(
       // A step is filed under the point it starts from on its way right or down.
       const axis = next % 2;
       const key = next < 2 ? j * width + i : nj * width + ni;
-      if (steps.closed[axis]![key] === 1) continue;
-      const a = { x: xs[i]!, y: ys[j]! };
-      const b = { x: xs[ni]!, y: ys[nj]! };
-      // Passing the gate: a stretch through it, reaching the line at `at`.
-      const through = inGate(a, b) &&
-        Math.min(gate!.run === 'x' ? a.x : a.y, gate!.run === 'x' ? b.x : b.y) <= gate!.at + 0.01 &&
-        Math.max(gate!.run === 'x' ? a.x : a.y, gate!.run === 'x' ? b.x : b.y) >= gate!.at - 0.01;
-      const np = p === 1 || through ? 1 : 0;
-      // Running closer to a wall than `clear` counts double: the line may pass
-      // a narrow gap, but where there is room it keeps its distance. Crossing a
-      // line already placed costs what a turn does, so of two ways much the
-      // same length the one that crosses nothing wins.
-      const length = Math.abs(b.x - a.x) + Math.abs(b.y - a.y) + steps.crowd[axis]![key]! +
-        turn * steps.cross[axis]![key]!;
+      if (closed[axis]![key] === 1) continue;
+      const ax = xs[i]!;
+      const ay = ys[j]!;
+      const bx = xs[ni]!;
+      const by = ys[nj]!;
+      const np = p === 1 || passes(ax, ay, bx, by) ? 1 : 0;
+      const length = stepCost(axis, key, ax, ay, bx, by);
       // Higher up for a stretch across, further right for one down: a smaller
       // tie-break is preferred, so the across level counts as it is and the
       // down level counts negated.
-      const lean = next % 2 === 0 ? a.y * length : -a.x * length;
+      const lean = next % 2 === 0 ? ay * length : -ax * length;
       relax(current, state(ni, nj, next, np), c + length, t + lean);
     }
   }
   if (!(cost[goal]! < limit)) return undefined;
 
   function relax(previous: number, next: number, c: number, t: number): void {
-    if (c < cost[next]! - 1e-9 || (Math.abs(c - cost[next]!) <= 1e-9 && t < tie[next]!)) {
+    const known = cost[next]!;
+    if (c < known - 1e-9 || (Math.abs(c - known) <= 1e-9 && t < tie[next]!)) {
       cost[next] = c;
       tie[next] = t;
       from[next] = previous;
@@ -284,6 +311,82 @@ export function searchRoute(
   }
   path.reverse();
   return { points: straightRuns([start, ...path, end]), cost: cost[goal]! };
+}
+
+/**
+ * The fewest turns a right-angled line makes from a point, leaving along
+ * `heading`, to a point `dx`, `dy` away, arriving along `arrival`, with nothing
+ * in the way. Every turn is a quarter turn.
+ */
+function fewestTurns(dx: number, dy: number, heading: readonly [number, number], arrival: readonly [number, number]): number {
+  // Half a hundredth either way is level: the tracks are a hundredth apart.
+  const ahead = dx * heading[0] + dy * heading[1] > -0.005;
+  if (heading[0] === arrival[0] && heading[1] === arrival[1]) {
+    const inLine = Math.abs(dy * heading[0] - dx * heading[1]) < 0.005;
+    return !ahead ? 4 : inLine ? 0 : 2;
+  }
+  if (heading[0] === -arrival[0] && heading[1] === -arrival[1]) return 2;
+  const toward = dx * arrival[0] + dy * arrival[1] > -0.005;
+  return ahead && toward ? 1 : 3;
+}
+
+/** The grid a search runs over, and what a single step on it costs. */
+interface StepGrid {
+  width: number;
+  height: number;
+  xs: number[];
+  ys: number[];
+  open: (i: number, j: number) => boolean;
+  closed: Uint8Array[];
+  passes: (ax: number, ay: number, bx: number, by: number) => boolean;
+  stepCost: (axis: number, key: number, ax: number, ay: number, bx: number, by: number) => number;
+}
+
+/**
+ * What the steps alone of the cheapest way from point `begin` to point `end`
+ * cost, by way of the gate when `done` is 1 — or `enough`, as soon as it is
+ * plain the way costs at least that. Turns are free here, so this is never
+ * more than the search proper finds. `least` is the least the rest could cost
+ * from each point, before and after the gate.
+ */
+function cheapestSteps(grid: StepGrid, begin: number, end: number, done: number, least: Float64Array, enough: number): number {
+  const { width, height, xs, ys, open, closed, passes, stepCost } = grid;
+  const spent = new Float64Array(width * height * 2).fill(Infinity);
+  const heap = new MinHeap();
+  const goal = end * 2 + done;
+  spent[begin * 2] = 0;
+  heap.push(begin * 2, least[begin * 2]!, 0);
+  while (heap.size > 0) {
+    const due = heap.topCost;
+    const entry = heap.pop();
+    const so = spent[entry]!;
+    if (due > so + least[entry]!) continue;
+    if (due >= enough) return enough;
+    if (entry === goal) return so;
+    const p = entry & 1;
+    const cell = entry >> 1;
+    const i = cell % width;
+    const j = (cell - i) / width;
+    for (let next = 0; next < 4; next += 1) {
+      const ni = next === 0 ? i + 1 : next === 2 ? i - 1 : i;
+      const nj = next === 1 ? j + 1 : next === 3 ? j - 1 : j;
+      if (ni < 0 || nj < 0 || ni >= width || nj >= height || !open(ni, nj)) continue;
+      const axis = next % 2;
+      const key = next < 2 ? cell : nj * width + ni;
+      if (closed[axis]![key] === 1) continue;
+      const ax = xs[i]!;
+      const ay = ys[j]!;
+      const bx = xs[ni]!;
+      const by = ys[nj]!;
+      const reached = (nj * width + ni) * 2 + (p === 1 || passes(ax, ay, bx, by) ? 1 : 0);
+      const length = so + stepCost(axis, key, ax, ay, bx, by);
+      if (length < spent[reached]!) {
+        spent[reached] = length;
+        heap.push(reached, length + least[reached]!, 0);
+      }
+    }
+  }
+  return enough;
 }
 
 /**
@@ -366,8 +469,7 @@ function depth(from: SearchEnd, wall: SearchWall): number {
  * of, looking no further than `limit`; Infinity if it meets none.
  */
 function distanceTo(from: SearchEnd, wall: SearchWall, limit: number): number {
-  const tip = { x: from.x + from.dx * limit, y: from.y + from.dy * limit };
-  if (!blocked(from, tip, [wall])) return Infinity;
+  if (!blocks(from.x, from.y, from.x + from.dx * limit, from.y + from.dy * limit, wall)) return Infinity;
   if (from.dx > 0) return wall.minX - from.x;
   if (from.dx < 0) return from.x - wall.maxX;
   if (from.dy > 0) return wall.minY - from.y;
@@ -381,17 +483,12 @@ function inside(point: SearchPoint, walls: SearchWall[]): boolean {
   );
 }
 
-/** Whether a level or upright stretch passes through the inside of any wall. */
-function blocked(a: SearchPoint, b: SearchPoint, walls: SearchWall[]): boolean {
-  return walls.some((wall) => blocks(a, b, wall));
-}
-
-/** Whether a level or upright stretch passes through the inside of one wall. */
-function blocks(a: SearchPoint, b: SearchPoint, wall: SearchWall): boolean {
-  const minX = Math.min(a.x, b.x);
-  const maxX = Math.max(a.x, b.x);
-  const minY = Math.min(a.y, b.y);
-  const maxY = Math.max(a.y, b.y);
+/** Whether a level or upright stretch from (ax, ay) to (bx, by) passes through the inside of one wall. */
+function blocks(ax: number, ay: number, bx: number, by: number, wall: SearchWall): boolean {
+  const minX = Math.min(ax, bx);
+  const maxX = Math.max(ax, bx);
+  const minY = Math.min(ay, by);
+  const maxY = Math.max(ay, by);
   if (minY === maxY) return minY > wall.minY && minY < wall.maxY && maxX > wall.minX && minX < wall.maxX;
   return minX > wall.minX && minX < wall.maxX && maxY > wall.minY && minY < wall.maxY;
 }
@@ -414,7 +511,7 @@ function stepTable(
   taken: SearchPoint[][],
   spacing: (line: number, stretch: number, own: number) => number,
   widest: number,
-  ownAt: (a: SearchPoint, b: SearchPoint) => number,
+  inGate: (ax: number, ay: number, bx: number, by: number) => boolean,
 ): { open: Uint8Array; closed: Uint8Array[]; crowd: Float64Array[]; cross: Int32Array[] } {
   const width = xs.length;
   const height = ys.length;
@@ -427,47 +524,53 @@ function stepTable(
   // side: a range to test exactly, never a test itself.
   const near = (values: number[], lo: number, hi: number): [number, number] =>
     [Math.max(0, firstAtLeast(values, lo) - 1), Math.min(values.length - 1, firstAtLeast(values, hi) + 1)];
-  const each = (
-    [i0, i1]: [number, number],
-    [j0, j1]: [number, number],
-    visit: (axis: number, a: SearchPoint, b: SearchPoint, key: number) => void,
-  ): void => {
-    for (let j = j0; j <= j1; j += 1) {
-      for (let i = i0; i <= i1; i += 1) {
-        const a = { x: xs[i]!, y: ys[j]! };
-        if (i + 1 < width) visit(0, a, { x: xs[i + 1]!, y: ys[j]! }, j * width + i);
-        if (j + 1 < height) visit(1, a, { x: xs[i]!, y: ys[j + 1]! }, j * width + i);
-      }
-    }
-  };
-
+  // Each loop below visits every step starting from a point in its ranges of tracks.
   for (const wall of walls) {
     const [i0, i1] = near(xs, wall.minX, wall.maxX);
     const [j0, j1] = near(ys, wall.minY, wall.maxY);
     for (let j = j0; j <= j1; j += 1) {
+      const ay = ys[j]!;
       for (let i = i0; i <= i1; i += 1) {
-        const x = xs[i]!;
-        const y = ys[j]!;
-        if (x > wall.minX && x < wall.maxX && y > wall.minY && y < wall.maxY) open[j * width + i] = 0;
+        const ax = xs[i]!;
+        const key = j * width + i;
+        if (ax > wall.minX && ax < wall.maxX && ay > wall.minY && ay < wall.maxY) open[key] = 0;
+        if (i + 1 < width && blocks(ax, ay, xs[i + 1]!, ay, wall)) closed[0]![key] = 1;
+        if (j + 1 < height && blocks(ax, ay, ax, ys[j + 1]!, wall)) closed[1]![key] = 1;
       }
     }
-    each([i0, i1], [j0, j1], (axis, a, b, key) => {
-      if (blocks(a, b, wall)) closed[axis]![key] = 1;
-    });
-    each(near(xs, wall.minX - clear, wall.maxX + clear), near(ys, wall.minY - clear, wall.maxY + clear), (axis, a, b, key) => {
-      crowd[axis]![key] = Math.max(crowd[axis]![key]!, crowding(a, b, wall, clear));
-    });
+    const [ci0, ci1] = near(xs, wall.minX - clear, wall.maxX + clear);
+    const [cj0, cj1] = near(ys, wall.minY - clear, wall.maxY + clear);
+    for (let j = cj0; j <= cj1; j += 1) {
+      const ay = ys[j]!;
+      for (let i = ci0; i <= ci1; i += 1) {
+        const ax = xs[i]!;
+        const key = j * width + i;
+        if (i + 1 < width) crowd[0]![key] = Math.max(crowd[0]![key]!, crowding(ax, ay, xs[i + 1]!, ay, wall, clear));
+        if (j + 1 < height) crowd[1]![key] = Math.max(crowd[1]![key]!, crowding(ax, ay, ax, ys[j + 1]!, wall, clear));
+      }
+    }
   }
   taken.forEach((line, which) => {
     for (let index = 0; index + 1 < line.length; index += 1) {
       const [p, q] = [line[index]!, line[index + 1]!];
       const reach = spacing(which, index, widest);
-      const xr = near(xs, Math.min(p.x, q.x) - reach, Math.max(p.x, q.x) + reach);
-      const yr = near(ys, Math.min(p.y, q.y) - reach, Math.max(p.y, q.y) + reach);
-      each(xr, yr, (axis, a, b, key) => {
-        if (runsAlong(a, b, p, q, spacing(which, index, ownAt(a, b)))) closed[axis]![key] = 1;
-        if (crosses(a, b, p, q)) cross[axis]![key] = cross[axis]![key]! + 1;
-      });
+      const plain = spacing(which, index, 0);
+      const [i0, i1] = near(xs, Math.min(p.x, q.x) - reach, Math.max(p.x, q.x) + reach);
+      const [j0, j1] = near(ys, Math.min(p.y, q.y) - reach, Math.max(p.y, q.y) + reach);
+      for (let j = j0; j <= j1; j += 1) {
+        const ay = ys[j]!;
+        for (let i = i0; i <= i1; i += 1) {
+          const ax = xs[i]!;
+          const key = j * width + i;
+          for (let axis = 0; axis < 2; axis += 1) {
+            if (axis === 0 ? i + 1 >= width : j + 1 >= height) continue;
+            const bx = axis === 0 ? xs[i + 1]! : ax;
+            const by = axis === 0 ? ay : ys[j + 1]!;
+            if (runsAlong(ax, ay, bx, by, p, q, inGate(ax, ay, bx, by) ? reach : plain)) closed[axis]![key] = 1;
+            if (crosses(ax, ay, bx, by, p, q)) cross[axis]![key] = cross[axis]![key]! + 1;
+          }
+        }
+      }
     }
   });
   return { open, closed, crowd, cross };
@@ -486,41 +589,44 @@ function firstAtLeast(values: number[], value: number): number {
 }
 
 /** How much of a stretch runs within `clear` of one wall's side, alongside it; 0 if none does. */
-function crowding(a: SearchPoint, b: SearchPoint, wall: SearchWall, clear: number): number {
-  const across = Math.abs(a.y - b.y) < 0.5;
-  const level = across ? a.y : a.x;
-  const from = across ? Math.min(a.x, b.x) : Math.min(a.y, b.y);
-  const to = across ? Math.max(a.x, b.x) : Math.max(a.y, b.y);
-  const [lo, hi] = across ? [wall.minY, wall.maxY] : [wall.minX, wall.maxX];
-  const [alo, ahi] = across ? [wall.minX, wall.maxX] : [wall.minY, wall.maxY];
+function crowding(ax: number, ay: number, bx: number, by: number, wall: SearchWall, clear: number): number {
+  const across = Math.abs(ay - by) < 0.5;
+  const level = across ? ay : ax;
+  const lo = across ? wall.minY : wall.minX;
+  const hi = across ? wall.maxY : wall.maxX;
   const near = (level > lo - clear + 0.01 && level <= lo) || (level >= hi && level < hi + clear - 0.01);
-  return near ? Math.max(0, Math.min(to, ahi) - Math.max(from, alo)) : 0;
+  if (!near) return 0;
+  const from = across ? Math.min(ax, bx) : Math.min(ay, by);
+  const to = across ? Math.max(ax, bx) : Math.max(ay, by);
+  const alo = across ? wall.minX : wall.minY;
+  const ahi = across ? wall.maxX : wall.maxY;
+  return Math.max(0, Math.min(to, ahi) - Math.max(from, alo));
 }
 
 /**
  * Whether a stretch runs along one stretch of a placed line, for any distance,
  * closer than `spacing`: a lane, or clear of a text either carries.
  */
-function runsAlong(a: SearchPoint, b: SearchPoint, p: SearchPoint, q: SearchPoint, spacing: number): boolean {
-  const across = Math.abs(a.y - b.y) < 0.5;
+function runsAlong(ax: number, ay: number, bx: number, by: number, p: SearchPoint, q: SearchPoint, spacing: number): boolean {
+  const across = Math.abs(ay - by) < 0.5;
   if ((Math.abs(p.y - q.y) < 0.5) !== across) return false;
-  const level = across ? a.y : a.x;
+  const level = across ? ay : ax;
   const other = across ? p.y : p.x;
   if (Math.abs(other - level) >= spacing - 0.5) return false;
-  const lo = across ? Math.min(a.x, b.x) : Math.min(a.y, b.y);
-  const hi = across ? Math.max(a.x, b.x) : Math.max(a.y, b.y);
+  const lo = across ? Math.min(ax, bx) : Math.min(ay, by);
+  const hi = across ? Math.max(ax, bx) : Math.max(ay, by);
   const pLo = across ? Math.min(p.x, q.x) : Math.min(p.y, q.y);
   const pHi = across ? Math.max(p.x, q.x) : Math.max(p.y, q.y);
   return Math.min(hi, pHi) - Math.max(lo, pLo) > 0.5;
 }
 
 /** Whether a stretch crosses one stretch of a placed line square on, touching neither end of either. */
-function crosses(a: SearchPoint, b: SearchPoint, p: SearchPoint, q: SearchPoint): boolean {
-  const across = Math.abs(a.y - b.y) < 0.5;
+function crosses(ax: number, ay: number, bx: number, by: number, p: SearchPoint, q: SearchPoint): boolean {
+  const across = Math.abs(ay - by) < 0.5;
   if ((Math.abs(p.y - q.y) < 0.5) === across) return false;
-  const level = across ? a.y : a.x;
-  const lo = across ? Math.min(a.x, b.x) : Math.min(a.y, b.y);
-  const hi = across ? Math.max(a.x, b.x) : Math.max(a.y, b.y);
+  const level = across ? ay : ax;
+  const lo = across ? Math.min(ax, bx) : Math.min(ay, by);
+  const hi = across ? Math.max(ax, bx) : Math.max(ay, by);
   const at = across ? p.x : p.y;
   const pLo = across ? Math.min(p.y, q.y) : Math.min(p.x, q.x);
   const pHi = across ? Math.max(p.y, q.y) : Math.max(p.x, q.x);
@@ -547,46 +653,87 @@ function straightRuns(points: SearchPoint[]): SearchPoint[] {
 
 /** A binary heap of states, cheapest first, ties broken by the second cost. */
 class MinHeap {
-  private items: [number, number, number][] = [];
+  private states = new Int32Array(1024);
+  private costs = new Float64Array(1024);
+  private ties = new Float64Array(1024);
+  size = 0;
 
-  get size(): number {
-    return this.items.length;
+  /** The cost and tie-break of the cheapest state waiting. */
+  get topCost(): number {
+    return this.costs[0]!;
+  }
+
+  get topTie(): number {
+    return this.ties[0]!;
   }
 
   push(state: number, cost: number, tie: number): void {
-    const items = this.items;
-    items.push([state, cost, tie]);
-    let at = items.length - 1;
+    if (this.size === this.states.length) this.grow();
+    const { states, costs, ties } = this;
+    let at = this.size;
+    this.size += 1;
     while (at > 0) {
       const parent = (at - 1) >> 1;
-      if (!before(items[at]!, items[parent]!)) break;
-      [items[at], items[parent]] = [items[parent]!, items[at]!];
+      if (!before(cost, tie, costs[parent]!, ties[parent]!)) break;
+      states[at] = states[parent]!;
+      costs[at] = costs[parent]!;
+      ties[at] = ties[parent]!;
       at = parent;
     }
+    states[at] = state;
+    costs[at] = cost;
+    ties[at] = tie;
   }
 
-  pop(): [number, number, number] {
-    const items = this.items;
-    const top = items[0]!;
-    const tail = items.pop()!;
-    if (items.length > 0) {
-      items[0] = tail;
+  /** Takes the cheapest state off the heap. */
+  pop(): number {
+    const { states, costs, ties } = this;
+    const top = states[0]!;
+    this.size -= 1;
+    const size = this.size;
+    if (size > 0) {
+      const state = states[size]!;
+      const cost = costs[size]!;
+      const tie = ties[size]!;
       let at = 0;
       for (;;) {
         const left = at * 2 + 1;
         const right = left + 1;
-        let best = at;
-        if (left < items.length && before(items[left]!, items[best]!)) best = left;
-        if (right < items.length && before(items[right]!, items[best]!)) best = right;
-        if (best === at) break;
-        [items[at], items[best]] = [items[best]!, items[at]!];
+        let best = -1;
+        let bestCost = cost;
+        let bestTie = tie;
+        if (left < size && before(costs[left]!, ties[left]!, bestCost, bestTie)) {
+          best = left;
+          bestCost = costs[left]!;
+          bestTie = ties[left]!;
+        }
+        if (right < size && before(costs[right]!, ties[right]!, bestCost, bestTie)) best = right;
+        if (best < 0) break;
+        states[at] = states[best]!;
+        costs[at] = costs[best]!;
+        ties[at] = ties[best]!;
         at = best;
       }
+      states[at] = state;
+      costs[at] = cost;
+      ties[at] = tie;
     }
     return top;
   }
+
+  private grow(): void {
+    const states = new Int32Array(this.states.length * 2);
+    const costs = new Float64Array(this.costs.length * 2);
+    const ties = new Float64Array(this.ties.length * 2);
+    states.set(this.states);
+    costs.set(this.costs);
+    ties.set(this.ties);
+    this.states = states;
+    this.costs = costs;
+    this.ties = ties;
+  }
 }
 
-function before(p: [number, number, number], q: [number, number, number]): boolean {
-  return p[1] < q[1] - 1e-9 || (Math.abs(p[1] - q[1]) <= 1e-9 && p[2] < q[2]);
+function before(pCost: number, pTie: number, qCost: number, qTie: number): boolean {
+  return pCost < qCost - 1e-9 || (Math.abs(pCost - qCost) <= 1e-9 && pTie < qTie);
 }
