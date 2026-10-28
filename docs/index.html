@@ -2051,6 +2051,10 @@ function shapeOf(outline, look, w, h) {
             const p = Math.min(look.point ?? SHAPE_DEFAULTS.point, w / 2);
             return polyShape([{ x: p, y: 0 }, { x: w - p, y: 0 }, { x: w, y: h / 2 }, { x: w - p, y: h }, { x: p, y: h }, { x: 0, y: h / 2 }]);
         }
+        case 'octagon': {
+            const c = octagonCut(w, h);
+            return polyShape([{ x: c, y: 0 }, { x: w - c, y: 0 }, { x: w, y: c }, { x: w, y: h - c }, { x: w - c, y: h }, { x: c, y: h }, { x: 0, y: h - c }, { x: 0, y: c }]);
+        }
         case 'trapezoid': {
             const t = Math.min(look.taper ?? SHAPE_DEFAULTS.taper, w / 2);
             return look.narrow === 'top'
@@ -2258,6 +2262,10 @@ function holdsBlock(outline, look, w, h, tw, th) {
     }
     return true;
 }
+/** How deep an octagon's corners are cut: as on a regular octagon as tall as its box, or as wide when narrower. */
+function octagonCut(w, h) {
+    return Math.min(w, h) / (2 + Math.SQRT2);
+}
 /**
  * The size an outline takes to hold a block `tw` by `th` (the text with its
  * padding) at its middle: a first guess that is exact for most shapes, then
@@ -2288,6 +2296,8 @@ function guessSize(outline, look, tw, th) {
             return { width: tw + (look.slant ?? SHAPE_DEFAULTS.slant), height: th };
         case 'hexagon':
             return { width: tw + 2 * (look.point ?? SHAPE_DEFAULTS.point), height: th };
+        case 'octagon':
+            return { width: tw + 2 * octagonCut(Infinity, th), height: th };
         case 'trapezoid':
             return { width: tw + 2 * (look.taper ?? SHAPE_DEFAULTS.taper), height: th };
         case 'triangle':
@@ -12561,6 +12571,7 @@ const OUTLINES = [
     'pill',
     'parallelogram',
     'hexagon',
+    'octagon',
     'trapezoid',
     'triangle',
     'cylinder',
@@ -12950,17 +12961,17 @@ function render(layout, options = {}) {
         if (hidden(edge))
             continue;
         const color = lineOf(edge.appearance, theme, theme.edge);
-        for (const which of ['from', 'to']) {
+        for (const [which, end] of [['from', 'start'], ['to', 'end']]) {
             const mark = edge.marks[which];
             const free = freeEnd(edge, which);
             if (mark !== 'none')
-                markers.set(markerId(mark, color, free), [mark, color, free]);
+                markers.set(markerId(mark, color, free, end), [mark, color, free, end]);
         }
     }
     const svg = [
         `<svg xmlns="http://www.w3.org/2000/svg" width="${canvas.width}" height="${canvas.height}" viewBox="${canvas.x} ${canvas.y} ${canvas.width} ${canvas.height}" font-family=${quote(measurer.fontFamily)} font-size="${fontSize}px">`,
         '  <defs>',
-        ...[...markers.values()].map(([mark, color, free]) => markMarker(mark, color, theme.background, free)),
+        ...[...markers.values()].map(([mark, color, free, end]) => markMarker(mark, color, theme.background, free, end)),
         // Each mask covers the whole page, in page units: the default region is the
         // line's own bounding box, which a straight level line gives no height, and
         // the line would vanish entirely.
@@ -13562,8 +13573,8 @@ function drawIcon(icon, x, y, side, theme) {
 function drawEdge(edge, route, theme, measurer, fontSize, markup) {
     const color = lineOf(edge.appearance, theme, theme.edge);
     const stroke = strokeOf(color, edge.look);
-    const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, freeEnd(edge, 'to'))})"` : '';
-    const markerStart = edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, freeEnd(edge, 'from'))})"` : '';
+    const markerEnd = edge.marks.to !== 'none' ? ` marker-end="url(#${markerId(edge.marks.to, color, freeEnd(edge, 'to'), 'end')})"` : '';
+    const markerStart = edge.marks.from !== 'none' ? ` marker-start="url(#${markerId(edge.marks.from, color, freeEnd(edge, 'from'), 'start')})"` : '';
     const points = route.points;
     const start = points[0];
     const end = points[points.length - 1];
@@ -13918,23 +13929,27 @@ function freeEnd(edge, which) {
     return edge.bundle !== undefined || edge.onLine?.[which] !== undefined || edge.onMark?.[which] === 'point';
 }
 /**
- * One marker, drawn at either end: `auto-start-reverse` turns it round at the
- * start. A dot keeps an ordinary line's size on any line, since scaled with a
- * thick line it became a blob. At a box it sits just outside the border; at a
- * free end it is centered on the point, since set back like an arrowhead, two
- * dots meeting at one point from either side ran together.
+ * One marker for one end of a line. Both ends use plain `orient="auto"`; the
+ * start's marker is drawn mirrored so it points back along the line, so
+ * renderers that ignore `auto-start-reverse` (resvg) draw both ends right. A
+ * dot keeps an ordinary line's size on any line, since scaled with a thick line
+ * it became a blob. At a box it sits just outside the border; at a free end it
+ * is centered on the point, since set back like an arrowhead, two dots meeting
+ * at one point from either side ran together.
  */
-function markMarker(mark, color, background, free) {
+function markMarker(mark, color, background, free, end) {
     const round = mark === 'dot' || mark === 'odot';
     const size = round ? ` markerUnits="userSpaceOnUse" markerWidth="${ARROW_MARKER_WIDTH * LINE_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH * LINE_WIDTH}"` : ` markerWidth="${ARROW_MARKER_WIDTH}" markerHeight="${ARROW_MARKER_WIDTH}"`;
+    const shape = markShape(mark, color, background);
+    const refX = round && free ? 5 : end === 'start' ? 1 : 9;
     return [
-        `    <marker id="${markerId(mark, color, free)}" viewBox="0 0 10 10" refX="${round && free ? 5 : 9}" refY="5"${size} orient="auto-start-reverse">`,
-        `      ${markShape(mark, color, background)}`,
+        `    <marker id="${markerId(mark, color, free, end)}" viewBox="0 0 10 10" refX="${refX}" refY="5"${size} orient="auto">`,
+        end === 'start' ? `      <g transform="translate(10 0) scale(-1 1)">${shape}</g>` : `      ${shape}`,
         '    </marker>',
     ].join('\n');
 }
-function markerId(mark, color, free) {
-    return `${mark}-${color.replace(/[^a-zA-Z0-9]/g, '')}${free && (mark === 'dot' || mark === 'odot') ? '-free' : ''}`;
+function markerId(mark, color, free, end) {
+    return `${mark}-${end === 'start' ? 'start-' : ''}${color.replace(/[^a-zA-Z0-9]/g, '')}${free && (mark === 'dot' || mark === 'odot') ? '-free' : ''}`;
 }
 /** The rectangle drawn, and whether it is round or another shape. */
 function faceOf(node) {

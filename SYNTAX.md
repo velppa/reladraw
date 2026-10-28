@@ -115,6 +115,7 @@ Every node has one body, the thing drawn where it is, named by one of two keys.
 | `pill` | a box with both ends round, a flowchart's start or end | |
 | `parallelogram` | a slanted box, a flowchart's input or output | `slant:`, `lean: right \| left` |
 | `hexagon` | a box with pointed ends, a flowchart's preparation | `point:` |
+| `octagon` | a box with each corner cut square across, a stop sign: a gate every path must pass | |
 | `trapezoid` | a box narrower at one end, a flowchart's manual operation | `taper:`, `narrow: bottom \| top` |
 | `triangle` | a triangle, a flowchart's merge (down) or extract (up) | `aim: down \| up \| left \| right` |
 | `cylinder` | a cylinder standing, or `lying` on its side, for stored data | `cap:`, `lying` |
@@ -1294,6 +1295,11 @@ Designed and absent from the code.
 ## Changelog
 
 Pre-1.0, so the minor number is where a breaking change goes. Every removal is refused by name with the replacement quoted, rather than dropped in silence: an older file stops with an error saying what to write instead.
+
+**Unreleased**
+
+- `shape: octagon`, a gate: each corner cut square across, as deep as on a regular octagon as tall as the box.
+- An arrowhead at a line's start points the right way in renderers that ignore `auto-start-reverse`, such as resvg. Browsers draw every line as before.
 
 **0.20.0**
 

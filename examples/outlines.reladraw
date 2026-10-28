@@ -17,6 +17,7 @@ node trapup   "sign off"  right of trap (gap: tight)  shape: trapezoid (taper: 3
 node up       "split"  right of trapup (gap: tight)  shape: triangle (aim: up)
 node down     "merge"  right of up (gap: tight)  shape: triangle
 node aimed    "next"  right of down (gap: tight)  shape: triangle (aim: right)
+node gate     "verify"  right of aimed (gap: tight)  shape: octagon
 
 node db       "orders"  below hexagon (gap: wide)  shape: cylinder
 node queue    "queue"  right of db (gap: tight)  shape: cylinder (cap: 1.5, lying)

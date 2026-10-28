@@ -188,6 +188,7 @@ export const OUTLINES = [
   'pill',
   'parallelogram',
   'hexagon',
+  'octagon',
   'trapezoid',
   'triangle',
   'cylinder',

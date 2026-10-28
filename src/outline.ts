@@ -214,6 +214,10 @@ export function shapeOf(outline: string, look: ShapeLook, w: number, h: number):
       const p = Math.min(look.point ?? SHAPE_DEFAULTS.point, w / 2);
       return polyShape([{ x: p, y: 0 }, { x: w - p, y: 0 }, { x: w, y: h / 2 }, { x: w - p, y: h }, { x: p, y: h }, { x: 0, y: h / 2 }]);
     }
+    case 'octagon': {
+      const c = octagonCut(w, h);
+      return polyShape([{ x: c, y: 0 }, { x: w - c, y: 0 }, { x: w, y: c }, { x: w, y: h - c }, { x: w - c, y: h }, { x: c, y: h }, { x: 0, y: h - c }, { x: 0, y: c }]);
+    }
     case 'trapezoid': {
       const t = Math.min(look.taper ?? SHAPE_DEFAULTS.taper, w / 2);
       return look.narrow === 'top'
@@ -423,6 +427,11 @@ function holdsBlock(outline: string, look: ShapeLook, w: number, h: number, tw: 
   return true;
 }
 
+/** How deep an octagon's corners are cut: as on a regular octagon as tall as its box, or as wide when narrower. */
+function octagonCut(w: number, h: number): number {
+  return Math.min(w, h) / (2 + Math.SQRT2);
+}
+
 /**
  * The size an outline takes to hold a block `tw` by `th` (the text with its
  * padding) at its middle: a first guess that is exact for most shapes, then
@@ -453,6 +462,8 @@ function guessSize(outline: string, look: ShapeLook, tw: number, th: number): { 
       return { width: tw + (look.slant ?? SHAPE_DEFAULTS.slant), height: th };
     case 'hexagon':
       return { width: tw + 2 * (look.point ?? SHAPE_DEFAULTS.point), height: th };
+    case 'octagon':
+      return { width: tw + 2 * octagonCut(Infinity, th), height: th };
     case 'trapezoid':
       return { width: tw + 2 * (look.taper ?? SHAPE_DEFAULTS.taper), height: th };
     case 'triangle':
